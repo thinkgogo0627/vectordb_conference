@@ -1,0 +1,38 @@
+services:
+  # 위키 편집 스트림 수집기 (24시간 상시 실행)
+  collector:
+    build: .
+    image: wiki-collector:latest
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - collector-data:/data
+    stop_grace_period: 60s   # 종료 시 남은 버퍼 flush + 업로드 시간
+    logging:
+      driver: json-file
+      options: { max-size: "20m", max-file: "5" }
+
+  # ---- 아래는 로컬 테스트용 (docker compose --profile local up) ----
+  # R2 대신 내 컴퓨터에 S3 호환 저장소를 띄움
+  minio:
+    image: minio/minio:RELEASE.2024-10-13T13-34-11Z
+    profiles: ["local"]
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports: ["9000:9000", "9001:9001"]
+    volumes:
+      - minio-data:/data
+
+  minio-init:
+    image: minio/mc:RELEASE.2024-10-08T09-37-26Z
+    profiles: ["local"]
+    depends_on: [minio]
+    entrypoint: >
+      sh -c "sleep 3 && mc alias set local http://minio:9000 minioadmin minioadmin
+      && mc mb -p local/wiki-lake && echo bucket ready"
+
+volumes:
+  collector-data:
+  minio-data:
