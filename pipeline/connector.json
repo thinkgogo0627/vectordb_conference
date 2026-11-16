@@ -1,0 +1,26 @@
+{
+  "name": "exp0-postgres",
+  "config": {
+    "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
+    "plugin.name": "pgoutput",
+    "database.hostname": "postgres",
+    "database.port": "5432",
+    "database.user": "exp",
+    "database.password": "exp",
+    "database.dbname": "exp",
+    "topic.prefix": "exp0",
+    "table.include.list": "public.wiki_revisions",
+    "column.exclude.list": "public.wiki_revisions.content",
+    "publication.autocreate.mode": "filtered",
+    "publication.name": "exp0_pub",
+    "slot.name": "exp0_slot",
+    "snapshot.mode": "no_data",
+    "tombstones.on.delete": "false",
+    "time.precision.mode": "connect",
+    "heartbeat.interval.ms": "0",
+    "key.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "key.converter.schemas.enable": "false",
+    "value.converter.schemas.enable": "false"
+  }
+}

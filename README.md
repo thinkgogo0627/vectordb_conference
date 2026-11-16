@@ -114,3 +114,61 @@ python -m pytest -q tests
 - 첫날 돌려보고 **하루 용량**을 꼭 확인. 본문 포함이라 R2 무료 용량(10GB)이 몇 주 버티는지 계산해야 함. 빠듯하면 `FETCH_CONTENT=false`로 메타만 받고 실험 때 필요한 리비전만 따로 받는 방식으로 전환
 - `content_status='failed'` 행은 API가 일시적으로 실패한 것. 백필 스크립트는 아직 없음
 - EventStreams 보관 기간(대략 1~4주)보다 오래 꺼져 있으면 그 구간은 못 되살림
+
+---
+
+# 실험 파이프라인 (`pipeline/`) — 실험 0: 간극 존재 증명
+
+설계 기준은 `docs/purpose/`. 수집기와 별개로, 부분집합을 Postgres에 리플레이하고 Debezium → Kafka → 워커 → FAISS로
+반영하면서 편집 후 경과 시간별 stale 비율을 잰다.
+
+```
+subset.parquet ──(replayer, 원래 간격×배속)──> Postgres ──Debezium──> Kafka ──> worker(embed_ms 대기) ──> FAISS(Flat)
+                                                  │                                                        ▲
+                                                  └────────────── evaluate (Postgres 최신 vs FAISS top-1) ─┘
+```
+
+## 준비 (한 번)
+
+```bash
+python -m venv .venv
+.venv/Scripts/pip install torch --index-url https://download.pytorch.org/whl/cpu
+.venv/Scripts/pip install -r requirements-exp.txt
+docker compose -f docker-compose.exp.yml up -d          # Postgres + Kafka + Debezium
+.venv/Scripts/python -m pipeline.register_connector
+```
+
+## 데이터 (T-01, T-02)
+
+```bash
+# R2에서 부분집합 (.env에 S3_* 필요, .env.example 참고)
+.venv/Scripts/python -m pipeline.make_subset --source r2 --date "2026-11-1*" --pages 200
+# 또는 R2 접근 전 검증용 합성 데이터
+.venv/Scripts/python -m pipeline.make_subset --source synthetic --pages 150 --revs 3 --window 240
+# 청크 분할 + bge-m3 임베딩 사전 계산 (embed_ms 실측 포함)
+.venv/Scripts/python -m pipeline.embed
+```
+
+## 실험 0 실행 (T-07)
+
+```bash
+.venv/Scripts/python -m pipeline.run_exp0 --run-id A --speed 1
+.venv/Scripts/python -m pipeline.run_exp0 --run-id B --speed 1
+.venv/Scripts/python -m pipeline.plot A B        # data/exp0/exp0_stale_curve.png + 재현성 수치
+```
+
+run마다 `data/exp0/runs/<run-id>/`에 `edits.parquet`(편집별 해소 시간), `judgments.parquet`(판정 로그),
+`worker_log.jsonl`, `replay_log.parquet`, `latency.json`(구간별 지연), `meta.json`(실행 명령·설정)이 남는다.
+
+| 모듈 | 작업 | 역할 |
+|---|---|---|
+| `make_subset.py` | T-01 | R2/로컬/합성 → `subset.parquet` |
+| `embed.py` | T-02 | 청크 분할(문단 단위, 800자) + 임베딩 + embed_ms |
+| `docker-compose.exp.yml`, `connector.json`, `register_connector.py` | T-03 | CDC 경로 |
+| `replayer.py` | T-04 | 원래 간격 × 배속 재생, t0 기록 |
+| `faiss_store.py`, `worker.py` | T-05 | 더 새 리비전일 때만 교체하는 Flat 인덱스 + Kafka 소비 + 검색 HTTP |
+| `evaluate.py`, `check_t06.py` | T-06 | normal / stale / missing 판정 |
+| `run_exp0.py`, `plot.py`, `latency.py` | T-07 | 한 번에 실행, 곡선, 구간별 지연 분해 |
+
+주의: Docker Desktop의 VM 시계가 호스트와 수십 초 어긋날 수 있다. stale 곡선은 호스트 시계만 쓰고,
+구간별 지연(`latency.py`)은 run 시작 때 잰 오프셋으로 보정한다.
