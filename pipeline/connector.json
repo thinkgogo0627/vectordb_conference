@@ -18,6 +18,7 @@
     "tombstones.on.delete": "false",
     "time.precision.mode": "connect",
     "heartbeat.interval.ms": "0",
+    "poll.interval.ms": "500",
     "key.converter": "org.apache.kafka.connect.json.JsonConverter",
     "value.converter": "org.apache.kafka.connect.json.JsonConverter",
     "key.converter.schemas.enable": "false",

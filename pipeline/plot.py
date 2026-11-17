@@ -40,6 +40,8 @@ def main() -> None:
     ap.add_argument("runs", nargs="+")
     ap.add_argument("--out", default=str(C.DATA_DIR / "exp0_stale_curve.png"))
     ap.add_argument("--step", type=float, default=0.05)
+    ap.add_argument("--title", default="실험 0: 원본 DB(Postgres) ↔ FAISS 간극")
+    ap.add_argument("--logx", action="store_true")
     a = ap.parse_args()
 
     import matplotlib
@@ -59,7 +61,9 @@ def main() -> None:
         meta_p = C.RUNS_DIR / r / "meta.json"
         meta = json.loads(meta_p.read_text(encoding="utf-8")) if meta_p.exists() else {}
         label = f"run {r} (n={summ['tracked']}, p50={summ['sync_s']['p50']:.2f}s, p90={summ['sync_s']['p90']:.2f}s)"
-        if meta.get("speed") is not None:
+        if meta.get("label"):
+            label = f"{meta['label']} [{r}] (p50={summ['sync_s']['p50']:.2f}s, p90={summ['sync_s']['p90']:.2f}s)"
+        elif meta.get("speed") is not None:
             label += f" ×{meta['speed']}"
         ax.step(grid, y, where="post", label=label)
     ax.set_xlabel("편집 후 경과 시간 (초)")
@@ -67,7 +71,9 @@ def main() -> None:
     ax.set_ylim(0, 1.02)
     ax.set_xlim(0, xmax)
     ax.grid(alpha=0.3)
-    ax.set_title("실험 0: 원본 DB(Postgres) ↔ FAISS 간극")
+    ax.set_title(a.title)
+    if a.logx:
+        ax.set_xscale("symlog", linthresh=1)
     ax.legend(fontsize=8)
     fig.tight_layout()
     fig.savefig(a.out, dpi=150)

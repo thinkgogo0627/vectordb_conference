@@ -67,3 +67,19 @@ def test_chunk_text_packs_paragraphs():
     assert chunks[1] == "c" * 300
     assert chunks[2] == "d" * 800 and chunks[3] == "d" * 200
     assert chunk_text("", 800) == [""]
+
+
+def test_apply_many_coalesces_and_bulk_replaces():
+    store = VersionedFlatIndex(8)
+    store.apply(1, 10, [(chunk_id(1, 0), _vec(1)), (chunk_id(1, 1), _vec(2))])
+    res = store.apply_many([
+        (1, 11, [(chunk_id(1, 0), _vec(3))]),
+        (1, 12, [(chunk_id(1, 0), _vec(4)), (chunk_id(1, 1), _vec(5)), (chunk_id(1, 2), _vec(6))]),
+        (2, 20, [(chunk_id(2, 0), _vec(7))]),
+        (1, 9, [(chunk_id(1, 0), _vec(8))]),
+    ])
+    assert res == ["coalesced", "applied", "applied", "coalesced"]
+    st = store.state()
+    assert st["page_rev"] == {1: 12, 2: 20} and st["ntotal"] == 4
+    assert store.chunk_revs([chunk_id(1, 2), chunk_id(3, 0)]) == [12, -1]
+    assert store.apply_many([(1, 11, [(chunk_id(1, 0), _vec(9))])]) == ["skipped_old"]

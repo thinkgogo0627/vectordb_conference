@@ -45,6 +45,46 @@ class VersionedFlatIndex:
             self.n_applied += 1
             return "applied"
 
+    def apply_many(self, items: list[tuple[int, int, list[tuple[int, np.ndarray]]]]) -> list[str]:
+        """묶음 반영: 여러 문서를 remove_ids 한 번, add_with_ids 한 번으로 교체한다.
+        같은 문서가 여러 번 있으면 가장 새 리비전만 반영하고 나머지는 'coalesced'."""
+        with self.lock:
+            latest: dict[int, int] = {}
+            for i, (page_id, rev_id, _c) in enumerate(items):
+                if page_id not in latest or rev_id > items[latest[page_id]][1]:
+                    latest[page_id] = i
+            results = ["coalesced"] * len(items)
+            remove: list[int] = []
+            add_ids: list[int] = []
+            add_vecs: list[np.ndarray] = []
+            for page_id, i in latest.items():
+                _p, rev_id, chunks = items[i]
+                cur = self.page_rev.get(page_id)
+                if cur is not None and cur >= rev_id:
+                    self.n_skipped_old += 1
+                    results[i] = "skipped_old"
+                    continue
+                for cid in self.page_chunks.get(page_id, []):
+                    remove.append(cid)
+                    self.chunk_rev.pop(cid, None)
+                for c, v in chunks:
+                    add_ids.append(c)
+                    add_vecs.append(v)
+                    self.chunk_rev[c] = rev_id
+                self.page_rev[page_id] = rev_id
+                self.page_chunks[page_id] = [c for c, _ in chunks]
+                self.n_applied += 1
+                results[i] = "applied"
+            if remove:
+                self.index.remove_ids(np.asarray(remove, dtype=np.int64))
+            if add_ids:
+                self.index.add_with_ids(np.stack(add_vecs).astype(np.float32), np.asarray(add_ids, dtype=np.int64))
+            return results
+
+    def chunk_revs(self, ids) -> list[int]:
+        with self.lock:
+            return [self.chunk_rev.get(int(i), -1) for i in ids]
+
     def search(self, vecs: np.ndarray, k: int = 1) -> tuple[np.ndarray, np.ndarray]:
         with self.lock:
             if self.index.ntotal == 0:

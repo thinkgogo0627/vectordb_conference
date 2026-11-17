@@ -172,3 +172,40 @@ run마다 `data/exp0/runs/<run-id>/`에 `edits.parquet`(편집별 해소 시간)
 
 주의: Docker Desktop의 VM 시계가 호스트와 수십 초 어긋날 수 있다. stale 곡선은 호스트 시계만 쓰고,
 구간별 지연(`latency.py`)은 run 시작 때 잰 오프셋으로 보정한다.
+
+## 실데이터·실험 1 (2026-11-18~)
+
+임베딩 기준 장비는 GPU(RTX 3060 Laptop, fp16)다. GPU 작업은 WSL의 conda 환경에서 돌린다.
+
+```bash
+# 레이크(R2) → 로컬. --until 날짜(UTC)까지
+.venv/Scripts/python -m pipeline.make_subset --source r2 --until 2026-11-17 --pages 0 --min-revs 1 --out data/lake/edits.parquet
+# 전체 임베딩 (WSL, GPU). 중단돼도 --resume 으로 이어감
+python -m pipeline.embed --subset data/lake/edits.parquet --out data/lake/emb --device cuda --fp16 --resume
+# R2에 올리기 / 받기
+.venv/Scripts/python -m pipeline.upload_r2 up data/lake/emb embeddings/bge-m3/until=2026-11-17
+.venv/Scripts/python -m pipeline.upload_r2 down embeddings/bge-m3/until=2026-11-17 data/lake/emb
+
+# 실험 1 입력: 6시간 구간 + 구간 직전 상태(base, 없으면 위키 API에서)
+.venv/Scripts/python -m pipeline.make_window --start 2026-11-16T00:00:00 --hours 6 --out data/exp1/subset.parquet
+python -m pipeline.embed --subset data/exp1/subset.parquet --out data/exp1/emb --device cuda --fp16   # WSL
+# 조건표 전체 2회씩 → 정리
+.venv/Scripts/python -m pipeline.run_exp1 --list
+.venv/Scripts/python -m pipeline.run_exp1
+.venv/Scripts/python -m pipeline.summarize_exp1     # docs/results/exp1/
+```
+
+임베딩 출력은 디렉터리 하나다. `revisions/`는 리비전별 청크 목록(위치 기준 chunk_id, sha1, 바뀜 여부, embed_ms)이고,
+`vectors/`는 문서별로 처음 나온 텍스트의 벡터(float16)다. 직전 리비전에 같은 텍스트가 있으면 벡터를 다시 쓰고
+그만큼은 embed_ms에 들어가지 않는다.
+
+| 모듈 | 역할 |
+|---|---|
+| `make_window.py` | 실험 1 리플레이 구간 + base 리비전 |
+| `embstore.py` | 임베딩 디렉터리 읽기 (옛 단일 파일 형식도 읽음) |
+| `upload_r2.py` | 디렉터리 ↔ R2 |
+| `run_exp1.py` | 조건표 (배속, 반영 주기, 워커 수, embed 대기 배율, Debezium poll 간격) 2회씩 |
+| `summarize_exp1.py` | 조건별 곡선, 구간별 지연 막대, 요약 표, 재현성 |
+
+주의: 이 저장소의 `.env`에 키 이름에 공백이 든 줄이 있으면 `docker compose`가 실패한다. 그럴 땐 컨테이너를
+`docker start exp0-postgres-1 exp0-kafka-1 exp0-connect-1`로 직접 켠다.

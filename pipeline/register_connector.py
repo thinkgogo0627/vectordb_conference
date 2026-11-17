@@ -28,10 +28,19 @@ def wait_connect(timeout_s: float = 180) -> None:
     raise SystemExit(f"Kafka Connect not reachable at {CONNECT_URL}")
 
 
-def register() -> dict:
+def register(overrides: dict | None = None) -> dict:
+    """connector.json 설정으로 등록·갱신. overrides로 일부 값을 바꿔 등록한다 (실험 1: poll.interval.ms)."""
     wait_connect()
     name = CONNECTOR["name"]
-    r = requests.put(f"{CONNECT_URL}/connectors/{name}/config", json=CONNECTOR["config"], timeout=30)
+    cfg = dict(CONNECTOR["config"], **{k: str(v) for k, v in (overrides or {}).items()})
+    cur = requests.get(f"{CONNECT_URL}/connectors/{name}/config", timeout=10)
+    if cur.ok and {k: v for k, v in cur.json().items() if k != "name"} == cfg:
+        pass  # 같은 설정이면 다시 넣지 않는다 (태스크 재시작 방지)
+    else:
+        r = requests.put(f"{CONNECT_URL}/connectors/{name}/config", json=cfg, timeout=30)
+        r.raise_for_status()
+        time.sleep(3)
+    r = requests.get(f"{CONNECT_URL}/connectors/{name}/status", timeout=10)
     r.raise_for_status()
     # RUNNING 될 때까지 대기
     for _ in range(60):

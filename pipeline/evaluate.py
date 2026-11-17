@@ -10,6 +10,11 @@
 편집 상태 = 청크 중 stale이 하나라도 있으면 stale, 아니면 missing, 아니면 normal.
 normal이 되면 그 편집은 해소(sync_elapsed = t0_host 기준 경과 초). max_wait 초 넘으면 timeout.
 
+비용 절감 (판정 결과는 같다): 먼저 /chunk_revs로 청크가 인덱스에 어느 리비전으로 있는지만 본다.
+없으면 missing, L보다 옛것이면 top-1과 무관하게 stale이므로 검색하지 않는다. L 이상일 때만 top-1 검색으로 확인한다.
+판정 로그(judgments)는 편집의 상태가 바뀔 때만 남긴다.
+base 리비전(is_base, 리플레이 직전 상태)은 최신 리비전 계산에만 쓰고 편집으로 세지 않는다.
+
     python -m pipeline.evaluate --run-id A --expected 450
 """
 from __future__ import annotations
@@ -25,6 +30,7 @@ import pyarrow.parquet as pq
 import requests
 
 from . import config as C
+from .embstore import load_revisions
 
 
 def judge_chunk(top1_id: int, top1_rev: int, want_rev: int, qc: int, latest: int) -> str:
@@ -50,32 +56,35 @@ class Evaluator:
         self.poll_s = poll_ms / 1000.0
         self.max_wait = max_wait
         # 벡터는 워커가 갖고 있다. 평가기는 (page, rev)별 청크 목록과 바뀐 청크만 안다.
-        t = pq.read_table(embeddings, columns=["page_id", "rev_id", "chunk_id", "changed"]).to_pylist()
         self.http = requests.Session()
         self.chunks: dict[tuple[int, int], set[int]] = {}
-        for r in t:
-            self.chunks.setdefault((r["page_id"], r["rev_id"]), set()).add(r["chunk_id"])
         self.changed: dict[tuple[int, int], list[int]] = {}
-        for r in t:
+        for r in load_revisions(embeddings):
+            key = (r["page_id"], r["rev_id"])
+            self.chunks.setdefault(key, set()).add(r["chunk_id"])
             if r["changed"]:
-                self.changed.setdefault((r["page_id"], r["rev_id"]), []).append(r["chunk_id"])
+                self.changed.setdefault(key, []).append(r["chunk_id"])
         self.latest: dict[int, int] = {}
         self.pending: list[dict] = []
         self.edits: list[dict] = []
         self.judgments: list[dict] = []
         self.last_id = 0
+        self.n_search = 0
+        self.n_polls = 0
 
     def fetch_new(self, cur) -> int:
-        cur.execute("SELECT id, page_id, rev_id, t0_host FROM wiki_revisions WHERE run_id=%s AND id>%s ORDER BY id",
-                    (self.run_id, self.last_id))
+        cur.execute("SELECT id, page_id, rev_id, t0_host, coalesce(is_base, false) FROM wiki_revisions "
+                    "WHERE run_id=%s AND id>%s ORDER BY id", (self.run_id, self.last_id))
         n = 0
-        for db_id, page_id, rev_id, t0 in cur.fetchall():
+        for db_id, page_id, rev_id, t0, is_base in cur.fetchall():
             self.last_id = db_id
             self.latest[page_id] = max(self.latest.get(page_id, -1), rev_id)
+            if is_base:
+                continue
             e = {"db_id": db_id, "page_id": page_id, "rev_id": rev_id, "t0_host": t0,
                  "n_chunks_changed": len(self.changed.get((page_id, rev_id), [])),
-                 "n_checks": 0, "first_check_elapsed": None, "last_stale_elapsed": None,
-                 "sync_elapsed": None, "final_status": None}
+                 "n_checks": 0, "first_check_elapsed": None, "first_status": None, "last_status": None,
+                 "last_stale_elapsed": None, "sync_elapsed": None, "final_status": None}
             if e["n_chunks_changed"] == 0:
                 e["final_status"] = "nochange"
                 self.edits.append(e)
@@ -87,27 +96,40 @@ class Evaluator:
     def check_pending(self) -> None:
         if not self.pending:
             return
-        queries, want, meta = [], [], []
+        self.n_polls += 1
+        meta = []   # (edit, qc, L, gone)
         for e in self.pending:
             p, r = e["page_id"], e["rev_id"]
             L = self.latest[p]
             for qc in self.changed[(p, r)]:
-                gone = qc not in self.chunks.get((p, L), ())   # 최신 리비전에서 이 청크가 사라짐 → 인덱스에서도 없어져야 정상
-                queries.append([p, r if gone else L, qc])
-                want.append(qc)
+                gone = qc not in self.chunks.get((p, L), ())   # 최신 리비전에서 이 청크가 사라짐
                 meta.append((e, qc, L, gone))
         t_check = time.time()
-        resp = self.http.post(f"{self.worker_url}/search", json={"keys": queries, "k": 1, "want_ids": want},
-                              timeout=30).json()
-        per_edit: dict[int, list[str]] = {}
-        details: dict[int, list] = {}
-        for (e, qc, L, gone), ids, revs, wrev in zip(meta, resp["ids"], resp["revs"], resp["want_revs"]):
+        wrevs = self.http.post(f"{self.worker_url}/chunk_revs", json={"ids": [m[1] for m in meta]},
+                               timeout=30).json()["revs"]
+        status = [None] * len(meta)
+        to_search = []
+        for i, ((e, qc, L, gone), wrev) in enumerate(zip(meta, wrevs)):
             if gone:
-                s = "normal" if wrev == -1 else "stale"
+                status[i] = "normal" if wrev == -1 else "stale"
+            elif wrev == -1:
+                status[i] = "missing"
+            elif wrev < L:
+                status[i] = "stale"
             else:
-                s = judge_chunk(ids[0], revs[0], wrev, qc, L)
+                to_search.append(i)
+        if to_search:
+            keys = [[meta[i][0]["page_id"], meta[i][2], meta[i][1]] for i in to_search]
+            resp = self.http.post(f"{self.worker_url}/search",
+                                  json={"keys": keys, "k": 1, "want_ids": [meta[i][1] for i in to_search]},
+                                  timeout=30).json()
+            self.n_search += len(to_search)
+            for i, ids, revs, wrev in zip(to_search, resp["ids"], resp["revs"], resp["want_revs"]):
+                _e, qc, L, _g = meta[i]
+                status[i] = judge_chunk(ids[0], revs[0], wrev, qc, L)
+        per_edit: dict[int, list[str]] = {}
+        for (e, _qc, _L, _g), s in zip(meta, status):
             per_edit.setdefault(e["db_id"], []).append(s)
-            details.setdefault(e["db_id"], []).append((qc, ids[0], revs[0], wrev, L, s))
         still = []
         for e in self.pending:
             st = judge_edit(per_edit[e["db_id"]])
@@ -115,9 +137,11 @@ class Evaluator:
             e["n_checks"] += 1
             if e["first_check_elapsed"] is None:
                 e["first_check_elapsed"] = elapsed
-            self.judgments.append({"db_id": e["db_id"], "page_id": e["page_id"], "rev_id": e["rev_id"],
-                                   "t_check": t_check, "elapsed": elapsed, "status": st,
-                                   "chunks": json.dumps(details[e["db_id"]])})
+                e["first_status"] = st
+            if st != e["last_status"]:
+                self.judgments.append({"db_id": e["db_id"], "page_id": e["page_id"], "rev_id": e["rev_id"],
+                                       "t_check": t_check, "elapsed": elapsed, "status": st})
+                e["last_status"] = st
             if st == "normal":
                 e["sync_elapsed"] = elapsed
                 e["final_status"] = "normal"
@@ -142,7 +166,8 @@ class Evaluator:
                 now = time.time()
                 if now - t_last_report > 10:
                     t_last_report = now
-                    print(f"[evaluate] seen={seen}/{expected} pending={len(self.pending)} resolved={len(self.edits)}", flush=True)
+                    print(f"[evaluate] seen={seen}/{expected} pending={len(self.pending)} resolved={len(self.edits)}",
+                          flush=True)
                 time.sleep(self.poll_s)
         pq.write_table(pa.Table.from_pylist(self.edits), run_dir / "edits.parquet")
         pq.write_table(pa.Table.from_pylist(self.judgments), run_dir / "judgments.parquet")
@@ -150,7 +175,7 @@ class Evaluator:
         counts: dict[str, int] = {}
         for e in self.edits:
             counts[e["final_status"]] = counts.get(e["final_status"], 0) + 1
-        print(f"[evaluate] done edits={len(self.edits)} status={counts} "
+        print(f"[evaluate] done edits={len(self.edits)} status={counts} polls={self.n_polls} searches={self.n_search} "
               f"sync_s median={np.median(synced) if synced else float('nan'):.2f} "
               f"p90={np.percentile(synced, 90) if synced else float('nan'):.2f} "
               f"max={max(synced) if synced else float('nan'):.2f}", flush=True)
@@ -159,10 +184,10 @@ class Evaluator:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--run-id", required=True)
-    ap.add_argument("--expected", type=int, required=True, help="이 run에서 들어올 리비전 수")
+    ap.add_argument("--expected", type=int, required=True, help="이 run에서 들어올 편집 수 (base 제외)")
     ap.add_argument("--embeddings", default=str(C.EMBED_PATH))
     ap.add_argument("--worker-url", default=f"http://127.0.0.1:{C.WORKER_PORT}")
-    ap.add_argument("--poll-ms", type=int, default=100)
+    ap.add_argument("--poll-ms", type=int, default=50)
     ap.add_argument("--max-wait", type=float, default=120.0)
     a = ap.parse_args()
     run_dir = C.RUNS_DIR / a.run_id

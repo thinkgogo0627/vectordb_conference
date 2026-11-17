@@ -31,6 +31,8 @@ def main() -> None:
     a = ap.parse_args()
 
     rows = pq.read_table(a.subset).to_pylist()
+    bases = [r for r in rows if r.get("is_base")]
+    rows = [r for r in rows if not r.get("is_base")]
     rows.sort(key=lambda r: (r["event_dt"], r["rev_id"]))
     if a.limit:
         rows = rows[:a.limit]
@@ -42,8 +44,18 @@ def main() -> None:
     log: list[dict] = []
     sql = ("INSERT INTO wiki_revisions (run_id, page_id, rev_id, parent_rev_id, page_title, event_dt, content, t0_host) "
            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id, replayed_at")
+    base_sql = ("INSERT INTO wiki_revisions (run_id, page_id, rev_id, parent_rev_id, page_title, event_dt, content, "
+                "t0_host, is_base) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,true)")
     print(f"[replayer] run={a.run_id} rows={len(rows)} speed={a.speed} span={sched[-1]:.1f}s", flush=True)
     with psycopg.connect(C.PG_DSN, autocommit=True) as conn, conn.cursor() as cur:
+        if bases:
+            # 리플레이 직전 상태(base). 워커는 같은 base를 시작할 때 FAISS에 넣어 두고 이 CDC 이벤트는 무시한다.
+            with conn.transaction():
+                cur.executemany(base_sql, [(a.run_id, b["page_id"], b["rev_id"], b["parent_rev_id"], b["page_title"],
+                                            _parse_dt(b["event_dt"]) if b["event_dt"] else dts[0], b["content"], 0.0)
+                                           for b in bases])
+            print(f"[replayer] base rows {len(bases)} inserted", flush=True)
+            time.sleep(2.0)  # base CDC 이벤트가 먼저 지나가게
         start = time.perf_counter()
         for i, r in enumerate(rows):
             target = start + sched[i]
