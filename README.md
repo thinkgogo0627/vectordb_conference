@@ -114,3 +114,98 @@ python -m pytest -q tests
 - 첫날 돌려보고 **하루 용량**을 꼭 확인. 본문 포함이라 R2 무료 용량(10GB)이 몇 주 버티는지 계산해야 함. 빠듯하면 `FETCH_CONTENT=false`로 메타만 받고 실험 때 필요한 리비전만 따로 받는 방식으로 전환
 - `content_status='failed'` 행은 API가 일시적으로 실패한 것. 백필 스크립트는 아직 없음
 - EventStreams 보관 기간(대략 1~4주)보다 오래 꺼져 있으면 그 구간은 못 되살림
+
+---
+
+# 실험 파이프라인 (`pipeline/`) — 실험 0: 간극 존재 증명
+
+설계 기준은 `docs/purpose/`. 수집기와 별개로, 부분집합을 Postgres에 리플레이하고 Debezium → Kafka → 워커 → FAISS로
+반영하면서 편집 후 경과 시간별 stale 비율을 잰다.
+
+```
+subset.parquet ──(replayer, 원래 간격×배속)──> Postgres ──Debezium──> Kafka ──> worker(embed_ms 대기) ──> FAISS(Flat)
+                                                  │                                                        ▲
+                                                  └────────────── evaluate (Postgres 최신 vs FAISS top-1) ─┘
+```
+
+## 준비 (한 번)
+
+```bash
+python -m venv .venv
+.venv/Scripts/pip install torch --index-url https://download.pytorch.org/whl/cpu
+.venv/Scripts/pip install -r requirements-exp.txt
+docker compose -f docker-compose.exp.yml up -d          # Postgres + Kafka + Debezium
+.venv/Scripts/python -m pipeline.register_connector
+```
+
+## 데이터 (T-01, T-02)
+
+```bash
+# R2에서 부분집합 (.env에 S3_* 필요, .env.example 참고)
+.venv/Scripts/python -m pipeline.make_subset --source r2 --date "2026-11-1*" --pages 200
+# 또는 R2 접근 전 검증용 합성 데이터
+.venv/Scripts/python -m pipeline.make_subset --source synthetic --pages 150 --revs 3 --window 240
+# 청크 분할 + bge-m3 임베딩 사전 계산 (embed_ms 실측 포함)
+.venv/Scripts/python -m pipeline.embed
+```
+
+## 실험 0 실행 (T-07)
+
+```bash
+.venv/Scripts/python -m pipeline.run_exp0 --run-id A --speed 1
+.venv/Scripts/python -m pipeline.run_exp0 --run-id B --speed 1
+.venv/Scripts/python -m pipeline.plot A B        # data/exp0/exp0_stale_curve.png + 재현성 수치
+```
+
+run마다 `data/exp0/runs/<run-id>/`에 `edits.parquet`(편집별 해소 시간), `judgments.parquet`(판정 로그),
+`worker_log.jsonl`, `replay_log.parquet`, `latency.json`(구간별 지연), `meta.json`(실행 명령·설정)이 남는다.
+
+| 모듈 | 작업 | 역할 |
+|---|---|---|
+| `make_subset.py` | T-01 | R2/로컬/합성 → `subset.parquet` |
+| `embed.py` | T-02 | 청크 분할(문단 단위, 800자) + 임베딩 + embed_ms |
+| `docker-compose.exp.yml`, `connector.json`, `register_connector.py` | T-03 | CDC 경로 |
+| `replayer.py` | T-04 | 원래 간격 × 배속 재생, t0 기록 |
+| `faiss_store.py`, `worker.py` | T-05 | 더 새 리비전일 때만 교체하는 Flat 인덱스 + Kafka 소비 + 검색 HTTP |
+| `evaluate.py`, `check_t06.py` | T-06 | normal / stale / missing 판정 |
+| `run_exp0.py`, `plot.py`, `latency.py` | T-07 | 한 번에 실행, 곡선, 구간별 지연 분해 |
+
+주의: Docker Desktop의 VM 시계가 호스트와 수십 초 어긋날 수 있다. stale 곡선은 호스트 시계만 쓰고,
+구간별 지연(`latency.py`)은 run 시작 때 잰 오프셋으로 보정한다.
+
+## 실데이터·실험 1 (2026-11-18~)
+
+임베딩 기준 장비는 GPU(RTX 3060 Laptop, fp16)다. GPU 작업은 WSL의 conda 환경에서 돌린다.
+
+```bash
+# 레이크(R2) → 로컬. --until 날짜(UTC)까지
+.venv/Scripts/python -m pipeline.make_subset --source r2 --until 2026-11-17 --pages 0 --min-revs 1 --out data/lake/edits.parquet
+# 전체 임베딩 (WSL, GPU). 중단돼도 --resume 으로 이어감
+python -m pipeline.embed --subset data/lake/edits.parquet --out data/lake/emb --device cuda --fp16 --resume
+# R2에 올리기 / 받기
+.venv/Scripts/python -m pipeline.upload_r2 up data/lake/emb embeddings/bge-m3/until=2026-11-17
+.venv/Scripts/python -m pipeline.upload_r2 down embeddings/bge-m3/until=2026-11-17 data/lake/emb
+
+# 실험 1 입력: 6시간 구간 + 구간 직전 상태(base, 없으면 위키 API에서)
+.venv/Scripts/python -m pipeline.make_window --start 2026-11-16T00:00:00 --hours 6 --out data/exp1/subset.parquet
+python -m pipeline.embed --subset data/exp1/subset.parquet --out data/exp1/emb --device cuda --fp16   # WSL
+# 조건표 전체 2회씩 → 정리
+.venv/Scripts/python -m pipeline.run_exp1 --list
+.venv/Scripts/python -m pipeline.run_exp1
+.venv/Scripts/python -m pipeline.summarize_exp1     # docs/results/exp1/
+```
+
+임베딩 출력은 디렉터리 하나다. `revisions/`는 리비전별 청크 목록(위치 기준 chunk_id, sha1, 바뀜 여부, embed_ms)이고,
+`vectors/`는 문서별로 처음 나온 텍스트의 벡터(float16)다. 직전 리비전에 같은 텍스트가 있으면 벡터를 다시 쓰고
+그만큼은 embed_ms에 들어가지 않는다.
+
+| 모듈 | 역할 |
+|---|---|
+| `make_window.py` | 실험 1 리플레이 구간 + base 리비전 |
+| `embstore.py` | 임베딩 디렉터리 읽기 (옛 단일 파일 형식도 읽음) |
+| `upload_r2.py` | 디렉터리 ↔ R2 |
+| `run_exp1.py` | 조건표 (배속, 반영 주기, 워커 수, embed 대기 배율, Debezium poll 간격) 2회씩 |
+| `summarize_exp1.py` | 조건별 곡선, 구간별 지연 막대, 요약 표, 재현성 |
+
+주의: 이 저장소의 `.env`에 키 이름에 공백이 든 줄이 있으면 `docker compose`가 실패한다. 그럴 땐 컨테이너를
+`docker start exp0-postgres-1 exp0-kafka-1 exp0-connect-1`로 직접 켠다.
