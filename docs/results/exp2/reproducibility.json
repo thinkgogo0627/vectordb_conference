@@ -1,0 +1,74 @@
+[
+  {
+    "condition": "tombstone",
+    "qset": "hot",
+    "max_recall_diff": 0.023,
+    "max_p95_diff_ms": 0.0808
+  },
+  {
+    "condition": "tombstone",
+    "qset": "cold",
+    "max_recall_diff": 0.021,
+    "max_p95_diff_ms": 0.0735
+  },
+  {
+    "condition": "tombstone",
+    "qset": "fixed",
+    "max_recall_diff": 0.001,
+    "max_p95_diff_ms": 0.0839
+  },
+  {
+    "condition": "reinsert",
+    "qset": "hot",
+    "max_recall_diff": 0.018,
+    "max_p95_diff_ms": 0.0604
+  },
+  {
+    "condition": "reinsert",
+    "qset": "cold",
+    "max_recall_diff": 0.021,
+    "max_p95_diff_ms": 0.177
+  },
+  {
+    "condition": "reinsert",
+    "qset": "fixed",
+    "max_recall_diff": 0.028,
+    "max_p95_diff_ms": 0.0858
+  },
+  {
+    "condition": "rebuild-0.05",
+    "qset": "hot",
+    "max_recall_diff": 0.023,
+    "max_p95_diff_ms": 0.0872
+  },
+  {
+    "condition": "rebuild-0.05",
+    "qset": "cold",
+    "max_recall_diff": 0.021,
+    "max_p95_diff_ms": 0.0909
+  },
+  {
+    "condition": "rebuild-0.05",
+    "qset": "fixed",
+    "max_recall_diff": 0.004,
+    "max_p95_diff_ms": 0.0644
+  },
+  {
+    "condition": "rebuild-0.1",
+    "qset": "hot",
+    "max_recall_diff": 0.023,
+    "max_p95_diff_ms": 0.0604
+  },
+  {
+    "condition": "rebuild-0.1",
+    "qset": "cold",
+    "max_recall_diff": 0.021,
+    "max_p95_diff_ms": 0.0841
+  },
+  {
+    "condition": "rebuild-0.1",
+    "qset": "fixed",
+    "max_recall_diff": 0.002,
+    "max_p95_diff_ms": 0.0573
+  }
+]
