@@ -51,6 +51,16 @@ services:
       timeout: 5s
       retries: 30
 
+  # 추천 파이프라인(reco/) 세션 저장소. 실험 0~2는 쓰지 않는다
+  redis:
+    image: redis:7.4
+    ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
   connect:
     image: debezium/connect:2.7.3.Final
     depends_on:
