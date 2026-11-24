@@ -11,3 +11,6 @@ pyarrow==26.0.1
 pytest==9.2.0
 requests==2.34.2
 sentence-transformers==6.3.0
+chroma-hnswlib==0.7.6
+gensim==4.4.0
+websockets==17.4
