@@ -1,0 +1,20 @@
+# market 파이프라인 프로세스 하나 (systemd 템플릿). %i = market 모듈 이름.
+#   sudo systemctl enable --now market@upbit_collector market@alpaca_collector market@bar_builder
+#   sudo systemctl enable --now market@vector_worker          # CDC 등록 뒤
+#   journalctl -u market@bar_builder -f                       # 로그
+[Unit]
+Description=market pipeline: %i
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/home/ubuntu/vectordb_conference
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONIOENCODING=utf-8
+ExecStart=/home/ubuntu/vectordb_conference/.venv/bin/python -m market.%i
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

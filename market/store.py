@@ -92,5 +92,37 @@ class Store:
             cur.executemany(UPSERT_STATUS, [(*r, built) for r in rows])
         self.conn.commit()
 
+    def copy_bars(self, bars: list[Bar]) -> int:
+        """과거 데이터 채우기용 대량 쓰기. 이미 있는 행(실시간으로 들어온 봉)은 건드리지 않는다."""
+        if not bars:
+            return 0
+        built = int(time.time() * 1000)
+        with self.conn.cursor() as cur:
+            cur.execute("CREATE TEMP TABLE IF NOT EXISTS bars_stage (LIKE bars_1m INCLUDING DEFAULTS) ON COMMIT DELETE ROWS")
+            with cur.copy("COPY bars_stage (source, symbol, minute_ts, asset_class, o, h, l, c, v, n, vw, recv_ts, built_ts) "
+                          "FROM STDIN") as cp:
+                for b in bars:
+                    cp.write_row((b.source, b.symbol, _ts(b.minute_ms), b.asset_class, b.o, b.h, b.l, b.c, b.v,
+                                  b.n, b.vw, b.recv_ts, built))
+            cur.execute("INSERT INTO bars_1m SELECT * FROM bars_stage ON CONFLICT DO NOTHING")
+            n = cur.rowcount
+        self.conn.commit()
+        return n
+
+    def write_refs(self, rows: list[tuple]) -> None:
+        """rows: (source, symbol, asset_class, asof_ms, n_days, sigma5, vref list, fill5, in_universe)"""
+        with self.conn.cursor() as cur:
+            cur.executemany(
+                """INSERT INTO symbol_ref VALUES (%s, %s, %s, to_timestamp(%s / 1000.0), %s, %s, %s, %s, %s)
+                   ON CONFLICT (source, symbol) DO UPDATE SET asset_class = EXCLUDED.asset_class, asof = EXCLUDED.asof,
+                   n_days = EXCLUDED.n_days, sigma5 = EXCLUDED.sigma5, vref = EXCLUDED.vref, fill5 = EXCLUDED.fill5,
+                   in_universe = EXCLUDED.in_universe""", rows)
+        self.conn.commit()
+
     def close(self) -> None:
         self.conn.close()
+
+
+def _ts(ms: int):
+    from datetime import datetime, timezone
+    return datetime.fromtimestamp(ms / 1000, timezone.utc)

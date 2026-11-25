@@ -18,6 +18,20 @@ CREATE TABLE IF NOT EXISTS bars_1m (
 );
 CREATE INDEX IF NOT EXISTS bars_1m_minute ON bars_1m (minute_ts);
 
+-- 종목별 평소 값과 오늘의 종목 목록 (market.backfill이 만든다. 설계 4절)
+CREATE TABLE IF NOT EXISTS symbol_ref (
+    source       TEXT NOT NULL,
+    symbol       TEXT NOT NULL,
+    asset_class  TEXT NOT NULL,
+    asof         TIMESTAMPTZ NOT NULL,           -- 이 시각 이전 데이터로 계산
+    n_days       INTEGER NOT NULL,
+    sigma5       DOUBLE PRECISION NOT NULL,      -- 평소 5분 로그수익률 크기 (1.4826 × MAD)
+    vref         DOUBLE PRECISION[] NOT NULL,    -- 슬롯별 평소 5분 거래량 (미국 30분 슬롯 13개, 코인 UTC 시간 24개)
+    fill5        DOUBLE PRECISION NOT NULL,      -- 5분 묶음 중 체결이 있던 비율
+    in_universe  BOOLEAN NOT NULL,               -- fill5 >= 0.8
+    PRIMARY KEY (source, symbol)
+);
+
 -- 거래 정지·재개 (Alpaca statuses). 종목마다 최신 상태 한 행. 이력은 CDC로 남는다.
 CREATE TABLE IF NOT EXISTS symbol_status (
     source       TEXT   NOT NULL,
