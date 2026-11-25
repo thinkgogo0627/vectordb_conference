@@ -26,13 +26,18 @@ from .store import Store
 
 LOOKBACK_MS = 3 * 60_000
 IDLE_FREEZE_S = 10.0
+TOPIC_CHECK_S = 15.0
 SOURCES = {"upbit": [C.T_UPBIT_TRADE],
            "alpaca": [C.T_ALPACA["b"], C.T_ALPACA["u"], C.T_ALPACA["s"]]}
 
 
-def start_offsets(c: Consumer, store: Store) -> list[TopicPartition]:
+def start_offsets(c: Consumer, store: Store, assigned: set | None = None) -> list[TopicPartition]:
+    """아직 읽고 있지 않은 (토픽, 파티션)의 시작 오프셋. 처음 시작할 때와, 실행 중에 새 토픽이 생겼을 때 쓴다.
+    (서버를 새로 띄우면 bar_builder가 수집기보다 먼저 떠서 토픽이 아직 없을 수 있다)"""
+    assigned = assigned or set()
     with store.conn.cursor() as cur:
-        cur.execute("SELECT source, (extract(epoch FROM max(minute_ts)) * 1000)::bigint FROM bars_1m GROUP BY source")
+        cur.execute("SELECT source, (extract(epoch FROM max(minute_ts)) * 1000)::bigint FROM bars_1m "
+                    "WHERE minute_ts > now() - interval '4 days' GROUP BY source")
         last = dict(cur.fetchall())
     store.conn.commit()
     existing = c.list_topics(timeout=10).topics
@@ -42,6 +47,8 @@ def start_offsets(c: Consumer, store: Store) -> list[TopicPartition]:
             if t not in existing:
                 continue
             for p in existing[t].partitions:
+                if (t, p) in assigned:
+                    continue
                 if src in last:
                     tps.append(TopicPartition(t, p, int(last[src] - LOOKBACK_MS)))
                 else:
@@ -64,7 +71,10 @@ def main() -> None:
     store = Store()
     c = Consumer({"bootstrap.servers": C.KAFKA, "group.id": "market-bar-builder", "enable.auto.commit": False,
                   "auto.offset.reset": "earliest"})
-    c.assign(start_offsets(c, store))
+    first = start_offsets(c, store)
+    c.assign(first)
+    assigned = {(tp.topic, tp.partition) for tp in first}
+    t_topics = time.time() + TOPIC_CHECK_S
     agg = UpbitMinuteBars(grace_ms=a.grace_ms)
     n = Counter()
     lat: list[int] = []
@@ -73,6 +83,12 @@ def main() -> None:
     newest_recv = 0
     try:
         while t_end is None or time.time() < t_end:
+            if time.time() >= t_topics:                 # 실행 중에 새로 생긴 토픽도 읽기 시작한다
+                t_topics = time.time() + TOPIC_CHECK_S
+                new = start_offsets(c, store, assigned)
+                if new:
+                    c.incremental_assign(new)
+                    assigned |= {(tp.topic, tp.partition) for tp in new}
             msgs = c.consume(2000, timeout=0.5)
             bars, statuses, last_recv = [], [], None
             for m in msgs:
