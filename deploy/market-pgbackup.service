@@ -1,0 +1,8 @@
+[Unit]
+Description=market: Postgres dump to R2
+After=docker.service
+
+[Service]
+Type=oneshot
+User=ubuntu
+ExecStart=/bin/bash /home/ubuntu/vectordb_conference/deploy/pg_backup.sh

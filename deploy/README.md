@@ -42,6 +42,26 @@ sudo systemctl enable --now market@vector_worker
 .venv/bin/python -m market.similar KRW-BTC
 ```
 
+## 7. R2 보관 (원천 메시지 + Postgres 일일 덤프)
+`.env`에 R2 설정 4줄을 더한다 (로컬 `.env`나 Cloudflare 대시보드에서 직접 복사):
+```bash
+nano .env
+# S3_ENDPOINT=https://<계정ID>.r2.cloudflarestorage.com
+# S3_BUCKET=...
+# S3_ACCESS_KEY=...
+# S3_SECRET_KEY=...
+```
+```bash
+git pull && bash deploy/setup.sh                       # 새 패키지(boto3, pyarrow)와 백업 타이머 등록
+.venv/bin/python -m market.r2 ls market/                # R2 접속 확인
+sudo systemctl enable --now market@archiver market-pgbackup.timer
+bash deploy/pg_backup.sh                                # 덤프 한 번 바로 올려 보기
+.venv/bin/python -m market.r2 ls market/
+```
+- 원천 메시지: `market/raw/<토픽>/date=YYYY-MM-DD/p<파티션>-<첫 오프셋>-<끝 오프셋>.parquet`, 10분마다.
+  올리기에 성공한 뒤에만 Kafka 오프셋을 커밋하므로 빠지는 메시지는 없고, 중복은 (토픽, 파티션, offset)으로 걸러 낸다.
+- Postgres: 매일 22:00 UTC에 `market/pgdump/YYYY-MM-DD.dump`, 최근 3개만 남긴다.
+
 ## 운영
 - 상태: `systemctl status 'market@*'`, `docker compose -f deploy/docker-compose.server.yml ps`
 - 로그: `journalctl -u market@<이름> -f`

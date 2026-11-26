@@ -16,7 +16,7 @@ python3 -m venv .venv
 
 docker compose -f deploy/docker-compose.server.yml up -d --wait
 
-sudo cp deploy/market@.service /etc/systemd/system/
+sudo cp deploy/market@.service deploy/market-pgbackup.service deploy/market-pgbackup.timer /etc/systemd/system/
 sudo systemctl daemon-reload
 
 echo "준비 끝. 다음: deploy/README.md 4단계 (수집기·bar_builder 시작)"

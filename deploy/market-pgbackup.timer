@@ -1,0 +1,12 @@
+# 매일 22:00 UTC (한국 07:00, 미국 장 마감 1시간 뒤)에 Postgres 덤프를 R2로.
+#   sudo systemctl enable --now market-pgbackup.timer
+#   systemctl list-timers market-pgbackup.timer
+[Unit]
+Description=market: daily Postgres dump to R2
+
+[Timer]
+OnCalendar=*-*-* 22:00:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

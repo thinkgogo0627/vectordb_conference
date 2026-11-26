@@ -691,3 +691,27 @@
 - 검증: 서버 Postgres `bars_1m`에 업비트 1분봉이 쌓이는 것을 사용자가 확인했다 [충족]. Alpaca 행은 이번에 확인하지 않았다 [미실행].
 - 남은 불확실성·후속: 다음 작업일에 5단계(과거 데이터), 6단계(CDC·벡터 워커), R2 백업을 한다. `test_market_store.py`가 DB 없이 멈추는 문제도 고친다.
 - 설계 피드백: 없음
+
+## 무관: R2 보관 — 원천 메시지 보관기와 Postgres 일일 덤프 (2026-11-27) — 부분 완료
+- 브랜치/커밋: `feat/market-collector` / 이 항목과 함께 커밋
+- 변경 범위:
+  - 새 파일
+    - `market/r2.py`: 올리기·목록·오래된 것 지우기
+    - `market/archiver.py`: Kafka `^raw\.` 구독 → 10분마다 (토픽, 파티션)별 Parquet(zstd) → R2 `market/raw/...`. 올린 뒤 오프셋 커밋
+    - `deploy/pg_backup.sh`, `deploy/market-pgbackup.service`·`.timer` (매일 22:00 UTC, 최근 3개 보관)
+    - `tests/test_market_archiver.py` (2)
+  - 수정
+    - `deploy/requirements-server.txt`: boto3, pyarrow 추가
+    - `deploy/setup.sh`: 타이머 복사
+    - `deploy/README.md`: 7단계 추가
+    - `market/store.py`: `connect_timeout=5`. DB가 꺼져 있으면 테스트가 멈추던 문제 해결
+  - 무관 사유: T-xx가 없는 확장 작업의 운영 준비다.
+- 계획과 달라진 점: 없음 (전날 후속으로 적어 둔 R2 백업, 테스트 멈춤 문제).
+- 검증:
+  - market 단위 테스트 18개 통과, DB 테스트 2개는 로컬 DB가 꺼져 있어 바로 건너뜀 [충족]
+  - 로컬 `.env`의 R2 설정으로 `market.r2 ls market/` 성공 (객체 0개) [충족]
+  - 서버에서 보관기·덤프 실제 실행 [미실행. 사용자가 서버 `.env`에 R2 설정을 넣은 뒤 진행]
+- 남은 불확실성·후속:
+  - R2 사용량은 추정이다. 원천 Parquet은 하루 수백 MB, 덤프 3개는 각각 수백 MB~수 GB로 본다. 무료 저장 용량 10GB/월을 넘는지 실측해야 한다.
+  - 보관기가 같은 메시지를 중복으로 올릴 수 있다. 읽을 때 걸러 내는 코드는 아직 없다.
+- 설계 피드백: 없음

@@ -59,7 +59,7 @@ WHERE symbol_status.status_ts <= EXCLUDED.status_ts
 
 class Store:
     def __init__(self, dsn: str = DSN):
-        self.conn = psycopg.connect(dsn, autocommit=False)
+        self.conn = psycopg.connect(dsn, autocommit=False, connect_timeout=5)
         with self.conn.cursor() as cur:
             cur.execute(SCHEMA.read_text(encoding="utf-8"))
         self.conn.commit()

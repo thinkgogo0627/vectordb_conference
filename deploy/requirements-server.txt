@@ -4,3 +4,6 @@ numpy==2.4.6
 psycopg==3.3.9
 psycopg-binary==3.3.9
 websockets==17.4
+# R2 보관 (archiver, pg_backup)
+boto3==1.44.3
+pyarrow==26.0.1
