@@ -1,0 +1,6 @@
+# 서버에서 market/ 파이프라인만 돌리는 데 필요한 패키지 (실험용 requirements-exp.txt보다 작다)
+confluent-kafka==2.16.1
+numpy==2.4.6
+psycopg==3.3.9
+psycopg-binary==3.3.9
+websockets==17.4
