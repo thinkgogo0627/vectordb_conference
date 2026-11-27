@@ -1,5 +1,25 @@
 {
-  "_설명": "market.pairs build가 데이터로 찾은 결과를 손으로 고친다. same: 같은 기초자산으로 묶을 쌍, not_same: 묶지 않을 쌍 (종목 코드)",
-  "same": [],
+  "_설명": "같은 기초자산 상품군. groups의 한 묶음 안 종목끼리는 모두 같은 기초자산으로 본다 (현물 ETF, 선물 ETF, 레버리지, 인버스). not_same은 상관이 0.98을 넘어도 묶지 않을 쌍. 데이터에 없는 종목은 build가 알려 주고 무시한다. 상관 0.85 이상인데 여기 없는 쌍은 build가 검토 후보로 출력한다",
+  "groups": [
+    {"name": "비트코인", "symbols": ["KRW-BTC", "IBIT", "FBTC", "BITB", "ARKB", "GBTC", "BTC", "HODL", "BRRR", "EZBC", "BTCO", "BTCW", "BITO", "BITX", "BITU", "SBIT", "BTCZ"]},
+    {"name": "이더리움", "symbols": ["KRW-ETH", "ETHA", "FETH", "ETHE", "ETH", "ETHW", "CETH", "ETHV", "QETH", "EZET", "ETHU", "ETHT", "ETHD"]},
+    {"name": "나스닥100", "symbols": ["QQQ", "QQQM", "TQQQ", "SQQQ", "QLD", "QID", "PSQ"]},
+    {"name": "S&P500", "symbols": ["SPY", "VOO", "IVV", "SPLG", "SPXL", "SPXS", "UPRO", "SPXU", "SSO", "SDS", "SH"]},
+    {"name": "러셀2000", "symbols": ["IWM", "VTWO", "TNA", "TZA", "UWM", "TWM"]},
+    {"name": "다우30", "symbols": ["DIA", "UDOW", "SDOW", "DDM", "DXD"]},
+    {"name": "반도체 지수(NYSE)", "symbols": ["SOXX", "SOXL", "SOXS"]},
+    {"name": "VIX 선물", "symbols": ["VXX", "VIXY", "UVXY", "UVIX", "SVXY", "SVIX"]},
+    {"name": "금", "symbols": ["GLD", "IAU", "GLDM", "SGOL", "UGL"]},
+    {"name": "은", "symbols": ["SLV", "SIVR", "AGQ"]},
+    {"name": "엔비디아", "symbols": ["NVDA", "NVDL", "NVDX", "NVDU", "NVDD", "NVDQ"]},
+    {"name": "테슬라", "symbols": ["TSLA", "TSLL", "TSLQ", "TSLR", "TSLT", "TSLZ"]},
+    {"name": "마이크론", "symbols": ["MU", "MUU"]},
+    {"name": "샌디스크", "symbols": ["SNDK", "SNXX"]},
+    {"name": "마이크로스트래티지", "symbols": ["MSTR", "MSTU", "MSTX"]},
+    {"name": "코인베이스", "symbols": ["COIN", "CONL"]},
+    {"name": "AMD", "symbols": ["AMD", "AMDL"]},
+    {"name": "팔란티어", "symbols": ["PLTR", "PLTU"]},
+    {"name": "애플", "symbols": ["AAPL", "AAPU"]}
+  ],
   "not_same": []
 }

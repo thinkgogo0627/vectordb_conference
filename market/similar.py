@@ -33,7 +33,8 @@ def main() -> None:
         return
     print(f"{a.symbol} 기준 {r['as_of'][11:16]} UTC 시세 (인덱스 반영 {r['indexed_s_ago']}초 전), 후보 {r['candidates']}종목")
     if r.get("same_underlying"):
-        print("    같은 기초자산 (접음): " + ", ".join(f"{x['symbol']}({x['corr']:+.2f})" for x in r["same_underlying"]))
+        print("    같은 기초자산 (접음): " + ", ".join(x["symbol"] + ("" if x.get("corr") is None else f"({x['corr']:+.2f})")
+                                                for x in r["same_underlying"]))
     for i, x in enumerate(r["results"], 1):
         more = f"  + {', '.join(x['same_underlying'])}" if x.get("same_underlying") else ""
         print(f"{i:2d}. {x['symbol']:<12} {x['asset_class']:<9} 거리 {x['distance']:.3f}  ({x['as_of'][11:16]} 기준){more}")

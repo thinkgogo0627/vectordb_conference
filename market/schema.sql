@@ -32,16 +32,19 @@ CREATE TABLE IF NOT EXISTS symbol_ref (
     PRIMARY KEY (source, symbol)
 );
 
--- 같은 기초자산 후보 쌍 (market.pairs가 만든다. 설계 4절). 미국 정규장 5분 수익률 상관, |corr| >= 0.8만 양방향 저장.
--- 기능 1은 |corr| >= 기준값인 쌍을 "같은 기초자산"으로 접는다 (BTC ↔ IBIT, NVDA ↔ NVDL).
+-- 같은 기초자산 쌍 (market.pairs가 만든다. 설계 4절). 양방향 저장.
+-- 행 = 상품군 목록의 쌍 + 미국 정규장 5분 수익률 |corr| >= 0.8인 쌍. 기능 1은 same인 쌍을 접는다 (BTC ↔ IBIT, NVDA ↔ NVDL).
 CREATE TABLE IF NOT EXISTS symbol_pair (
     source_a TEXT NOT NULL, symbol_a TEXT NOT NULL,
     source_b TEXT NOT NULL, symbol_b TEXT NOT NULL,
-    corr     DOUBLE PRECISION NOT NULL,        -- 인버스는 음수. 수동 지정은 1
-    n        INTEGER NOT NULL,                 -- 겹친 5분 수익률 수 (수동 지정은 0)
+    corr     DOUBLE PRECISION,                 -- 인버스는 음수. 상관을 못 쟀으면 NULL
+    n        INTEGER NOT NULL,                 -- 겹친 5분 수익률 수
     asof     TIMESTAMPTZ NOT NULL,
     PRIMARY KEY (source_a, symbol_a, source_b, symbol_b)
 );
+ALTER TABLE symbol_pair ALTER COLUMN corr DROP NOT NULL;
+ALTER TABLE symbol_pair ADD COLUMN IF NOT EXISTS manual BOOLEAN NOT NULL DEFAULT false;   -- 상품군 목록에 있음
+ALTER TABLE symbol_pair ADD COLUMN IF NOT EXISTS same   BOOLEAN NOT NULL DEFAULT false;   -- 같은 기초자산 (목록 또는 |corr| >= 0.98)
 
 -- 거래 정지·재개 (Alpaca statuses). 종목마다 최신 상태 한 행. 이력은 CDC로 남는다.
 CREATE TABLE IF NOT EXISTS symbol_status (

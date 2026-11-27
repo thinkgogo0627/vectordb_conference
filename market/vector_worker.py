@@ -69,12 +69,11 @@ class Worker:
     # ---------- 준비 ----------
     def load_pairs(self) -> None:
         self.pairs = pairs.load(self.store)
-        n = sum(1 for d in self.pairs.values() for c in d.values() if abs(c) >= pairs.SAME_CORR) // 2
-        print(f"[vec] 같은 기초자산 쌍 {n}개 (|상관| >= {pairs.SAME_CORR})", flush=True)
+        n = sum(len(d) for d in self.pairs.values()) // 2
+        print(f"[vec] 같은 기초자산 쌍 {n}개 (상품군 목록 + |상관| >= {pairs.AUTO_CORR})", flush=True)
 
-    def same(self, a: tuple[str, str], b: tuple[str, str]) -> float | None:
-        c = self.pairs.get(a, {}).get(b)
-        return c if c is not None and abs(c) >= pairs.SAME_CORR else None
+    def same(self, a: tuple[str, str], b: tuple[str, str]) -> bool:
+        return b in self.pairs.get(a, {})
 
     def load_refs(self) -> None:
         with self.store.conn.cursor() as cur:
@@ -210,11 +209,12 @@ class Worker:
             for j in o:
                 i, dd = idx[j], d[j]
                 kk = self.keys[i]
-                if fold and (c := self.same(key, kk)) is not None:
-                    same_q.append(item(i, dd) | {"corr": round(c, 3)})
+                if fold and self.same(key, kk):
+                    c = self.pairs[key][kk]
+                    same_q.append(item(i, dd) | {"corr": None if c is None else round(c, 3)})
                     continue
                 if fold:
-                    host = next((x for x in kept if self.same(x[0], kk) is not None), None)
+                    host = next((x for x in kept if self.same(x[0], kk)), None)
                     if host is not None:
                         host[1]["same_underlying"].append(kk[1])
                         continue
