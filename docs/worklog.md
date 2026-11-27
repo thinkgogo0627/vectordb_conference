@@ -741,3 +741,85 @@
   - R2 `.env` 설정과 보관기 시작은 다음 날로 미룸
   - `market.cdc delete`가 복제 슬롯까지 지우는 옵션은 아직 없다 (지금은 psql로 직접 지움).
 - 설계 피드백: 없음
+
+## 무관: 기능 1 같은 기초자산 접기 (2026-11-27) — 부분 완료
+- 브랜치/커밋: `feat/market-collector` / 미커밋
+- 변경 범위:
+  - 새 파일
+    - `market/pairs.py`
+      - 직전 20거래일 미국 정규장 5분 수익률로 종목 쌍 상관을 잰다. 코인 포함, 겹친 시점만 쓴다.
+      - |corr| ≥ 0.8인 쌍을 `symbol_pair`에 저장한다.
+      - 명령: `build`, `show`
+    - `market/same_underlying_manual.json`: 손 보정 목록 (지금은 비어 있음)
+    - `tests/test_market_pairs.py` (3)
+  - 수정
+    - `market/schema.sql`: `symbol_pair` 테이블
+    - `market/vector_worker.py`
+      - 시작할 때 쌍을 읽는다.
+      - `/similar`가 질의와 같은 기초자산(|corr| ≥ 0.95)을 `same_underlying`으로 빼고, 결과끼리 같은 기초자산은 먼저 나온 항목 밑에 붙인다.
+      - `fold=0`이면 접지 않는다.
+    - `market/similar.py`: `--no-fold`, 접힌 종목 출력
+    - `docs/design/market-reco.md`: 2절 기능 1(접기), 기능 2(같은 기초자산의 같은 시각 구간 제외), 4절 "같은 기초자산 묶음", 6절 기준값 미결
+    - `market/README.md`, `deploy/README.md` 6단계 (`market.pairs build`를 벡터 워커 전에)
+  - 노션 추가 구현 → 기능 1·2에 같은 내용 반영
+  - 무관 사유: T-xx가 없는 확장 작업(기능 1 결과 품질)이다.
+- 계획과 달라진 점:
+  - 묶음을 사슬로 잇지 않고 쌍 단위로만 본다. 지수 ETF끼리 큰 덩어리로 이어지는 것을 막기 위해서다.
+  - 구성종목 ↔ ETF는 묶지 않는다 (사용자 결정).
+- 검증:
+  - market 단위 테스트 21개 통과, DB 테스트 2개 건너뜀 [충족]
+  - 합성 데이터에서 2배 레버리지·인버스는 |corr| > 0.98로 묶이고, 무관 종목은 |corr| < 0.2 [충족]
+  - 실제 데이터에서 상관 분포를 보고 기준값 0.95 확인 [미실행. 로컬 Docker가 뜨지 않음. 서버에서 `market.pairs build` 출력으로 확인 예정]
+  - `build`의 SQL 실행 [미실행. DB 없이 작성]
+- 남은 불확실성·후속:
+  - IEX는 거래량 표본이 작아 레버리지 쌍의 5분 상관이 0.95보다 낮을 수 있다. 낮으면 기준값을 내리거나 손 보정 목록에 넣는다.
+  - 기능 2 이웃 제외 규칙은 설계에만 있고 코드는 기능 2와 함께 만든다.
+- 설계 피드백: 없음
+
+## 무관: 위키 데이터 삭제 (2026-11-27) — 부분 완료
+- 브랜치/커밋: `feat/market-collector` / 미커밋 (코드 변경 없음)
+- 변경 범위:
+  - 지운 것 (사용자가 범위를 골라 확인함)
+    - R2 `raw/wiki_recentchange/`: 6,054개, 0.718GB
+    - R2 `embeddings/bge-m3/`: 27개, 1.217GB
+    - 로컬 `data/lake`, `data/exp0`, `data/exp1`, `data/exp2`: 약 8.8GB. `data/`는 git 밖이라 저장소에는 영향 없음. OneDrive 휴지통에 남을 수 있음
+  - 남긴 것: 커머스 `data/exp2c`, `data/retail`, `data/market`
+  - 무관 사유: 확장 작업(시세)으로 넘어가면서 끝난 실험 데이터를 정리한 것이다.
+- 계획과 달라진 점: 없음
+- 검증:
+  - R2 두 접두사 남은 객체 0, 버킷 전체 0.000GB [충족]
+  - 로컬 `data/` 9.9GB → 1.1GB [충족]
+  - 오라클 VM 위키 수집기 중지 [미실행. 사용자가 VM에서 직접]
+- 남은 불확실성·후속:
+  - 수집기는 멈출 때 남은 버퍼를 올린다. 멈춘 뒤 R2 `raw/wiki_recentchange/`를 한 번 더 지워야 한다.
+  - 실험 0~2는 이제 다시 돌릴 수 없다. 결과는 README·worklog·노션에만 남는다.
+- 설계 피드백: 없음
+
+## 무관: 공유용 저장소 복사본과 기능 1 실행 검증 (2026-11-27) — 완료
+- 브랜치/커밋: 원본 `feat/market-collector` 미커밋 / 새 폴더 `바탕 화면/vectordb_conference_public` (git init만, 커밋 없음)
+- 변경 범위:
+  - 새 폴더에 vectordb 관련 파일 116개 복사: `collector/`, `pipeline/`, `market/`, `deploy/`, `tests/`, `docs/results/`, `docs/design/market-reco.md`, compose·requirements
+  - 뺀 것: `AGENTS.md`, `CLAUDE.md`, `docs/worklog.md`, `docs/purpose/`, `docs/design/commerce-reco.md`·`reco-pipeline.png`, `reco/`, `.env`, `data/`
+  - 새 폴더에서 정리한 것
+    - 코드 주석의 작업 번호(T-xx, D-xx, GR-xx, P3.x)와 "사용자 결정", worklog 참조
+    - `pipeline/check_t06.py` → `check_stale_eval.py`
+    - README 새로 씀 (프로젝트 개요, 실험 결론, 수집기, 실험 0~2, 확장)
+    - `.env.example` 추가 (이름만)
+    - `deploy/README.md` clone 주소 → `<이 저장소 URL>`
+    - `market/README.md`의 빈 env 파일 우회 안내 제거
+  - 원본·새 폴더 공통 수정: `market/pairs.py` — 미국 주식 1분봉이 없으면(코인만) 쌍을 만들지 않고 끝낸다 (전에는 IndexError)
+  - 무관 사유: 팀 공유 준비다.
+- 계획과 달라진 점: 검증 스택은 기존 로컬 `exp0` 컨테이너를 건드리지 않도록 compose 프로젝트 이름을 `vdbpublic`으로 따로 띄웠다.
+- 검증:
+  - 새 폴더 단위 테스트 36개 통과, 2개 건너뜀(DB) [충족]. `test_s3_upload.py`는 moto가 없어 수집 오류 [미실행]
+  - 기능 1 실행 (새 폴더, 코인만)
+    - 순서: 업비트 수집기 + bar_builder → `backfill upbit --days 2 --top 40` → `upbit-gap --hours 1` → `pairs build` → `cdc register` → `vector_worker`
+    - 결과: 35/35 종목 벡터, 매분 재계산 (08:45·08:46·08:47 UTC 확인), `similar KRW-BTC` top-10 응답, 없는 종목은 "벡터 없음" [충족]
+    - DB 쓰기 → 검색 가능 p50 1.26초, p95 2.13초. DB 쓰기 → CDC 도착 p50 0.20초 [충족. 호스트 시계 동기화는 안 함]
+  - 미국 주식 결과와 같은 기초자산 접기는 실데이터로 확인하지 않음 [미실행. 오늘 미국장 시간이 아니고 Alpaca 키를 새 폴더에 넣지 않음]
+  - 검증 뒤 프로세스 종료, `vdbpublic` 스택 `down -v`
+- 남은 불확실성·후속:
+  - `backfill upbit`는 직전 정시까지만 채운다. 실시간 수집 시작까지의 빈 구간은 `upbit-gap`이 꼭 필요하다 (이번에도 빼먹으면 유효 0/35였다).
+  - 업비트 "수집기 수신 → 검색 가능"(p50 약 12초)은 봉의 마지막 체결 수신 시각부터 재서 부풀려진다. 봉 마감 기준으로 바꿔야 한다 (기존 후속).
+  - 새 폴더는 원본과 따로 논다. 원본을 고치면 새 폴더에 다시 옮겨야 한다.
+- 설계 피드백: 없음

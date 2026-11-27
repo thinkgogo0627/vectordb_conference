@@ -10,6 +10,7 @@
 - 소스(업비트·Alpaca)마다 지금 시각 t = 들어온 가장 늦은 1분봉 + 1분. t가 바뀌고 그 소스의 메시지가 1초 동안
   멈추면(한 분의 봉이 다 들어옴) 그 소스 종목 전부를 다시 계산한다. 지난 분의 정정이 오면 그 종목만 다시 계산한다.
 - 현재 상태 인덱스는 종목당 벡터 1개, 약 2,300개라 Flat(전수조사)으로 둔다. 매분 통째로 바뀌므로 꺼두기를 쓰지 않는다.
+- 같은 기초자산(market.pairs: BTC ↔ IBIT, NVDA ↔ NVDL)은 결과에서 접는다. 시작할 때 symbol_pair를 읽는다.
 - 지연: 1분봉마다 (인덱스에 반영된 시각 − 수집기 수신 시각), (반영 − bar_builder 쓰기)를 호스트 시계로 잰다.
 """
 from __future__ import annotations
@@ -27,6 +28,7 @@ import numpy as np
 from confluent_kafka import Consumer, TopicPartition
 
 from . import config as C
+from . import pairs
 from .cdc import TOPIC
 from .features import DIM, MIN, Ref, state_vector
 from .store import Store
@@ -62,8 +64,18 @@ class Worker:
         self.mat = np.zeros((0, DIM), np.float32)
         self.keys: list[tuple[str, str]] = []
         self.stats = defaultdict(int)
+        self.pairs: dict[tuple[str, str], dict[tuple[str, str], float]] = {}     # 같은 기초자산 후보 (market.pairs)
 
     # ---------- 준비 ----------
+    def load_pairs(self) -> None:
+        self.pairs = pairs.load(self.store)
+        n = sum(1 for d in self.pairs.values() for c in d.values() if abs(c) >= pairs.SAME_CORR) // 2
+        print(f"[vec] 같은 기초자산 쌍 {n}개 (|상관| >= {pairs.SAME_CORR})", flush=True)
+
+    def same(self, a: tuple[str, str], b: tuple[str, str]) -> float | None:
+        c = self.pairs.get(a, {}).get(b)
+        return c if c is not None and abs(c) >= pairs.SAME_CORR else None
+
     def load_refs(self) -> None:
         with self.store.conn.cursor() as cur:
             cur.execute("SELECT source, symbol, asset_class, sigma5, vref, fill5, in_universe FROM symbol_ref")
@@ -164,7 +176,10 @@ class Worker:
                      if l is not None else ""), flush=True)
 
     # ---------- 검색 (기능 1) ----------
-    def similar(self, symbol: str, k: int, scope: str, include_stale: bool) -> dict:
+    def similar(self, symbol: str, k: int, scope: str, include_stale: bool, fold: bool = True) -> dict:
+        """가까운 순 top-k. fold면 같은 기초자산을 접는다:
+        - 질의와 같은 기초자산(BTC → IBIT)은 결과에서 빼고 same_underlying에 따로 둔다.
+        - 결과끼리 같은 기초자산이면(IBIT, FBTC) 먼저 나온 것 하나만 남기고 나머지는 그 항목의 same_underlying에 넣는다."""
         with self.lock:
             key = next((kk for kk in self.keys if kk[1] == symbol), None)
             if key is None:
@@ -182,15 +197,37 @@ class Worker:
                     mask[i] = False
             idx = np.flatnonzero(mask)
             d = np.linalg.norm(self.mat[idx] - q, axis=1)
-            order = idx[np.argsort(d)[:k]]
-            dist = np.sort(d)[:k]
+            o = np.argsort(d)
             now = int(time.time() * 1000)
-            res = [{"symbol": self.keys[i][1], "asset_class": self.cls[self.keys[i]], "distance": round(float(dd), 4),
-                    "as_of": datetime.fromtimestamp(self.index[self.keys[i]][1] / 1000, timezone.utc).isoformat(),
-                    "indexed_s_ago": round((now - self.index[self.keys[i]][2]) / 1000, 1)}
-                   for i, dd in zip(order, dist)]
+
+            def item(i, dd):
+                kk = self.keys[i]
+                return {"symbol": kk[1], "asset_class": self.cls[kk], "distance": round(float(dd), 4),
+                        "as_of": datetime.fromtimestamp(self.index[kk][1] / 1000, timezone.utc).isoformat(),
+                        "indexed_s_ago": round((now - self.index[kk][2]) / 1000, 1)}
+
+            res, same_q, kept = [], [], []                       # kept: (key, 결과 항목)
+            for j in o:
+                i, dd = idx[j], d[j]
+                kk = self.keys[i]
+                if fold and (c := self.same(key, kk)) is not None:
+                    same_q.append(item(i, dd) | {"corr": round(c, 3)})
+                    continue
+                if fold:
+                    host = next((x for x in kept if self.same(x[0], kk) is not None), None)
+                    if host is not None:
+                        host[1]["same_underlying"].append(kk[1])
+                        continue
+                if len(res) >= k:
+                    if not fold:
+                        break
+                    continue                                     # 접을 것만 더 찾는다 (질의와 같은 기초자산)
+                it = item(i, dd) | ({"same_underlying": []} if fold else {})
+                res.append(it)
+                kept.append((kk, it))
             return {"symbol": symbol, "as_of": datetime.fromtimestamp(tq / 1000, timezone.utc).isoformat(),
-                    "indexed_s_ago": round((now - built_q) / 1000, 1), "candidates": int(len(idx)), "results": res}
+                    "indexed_s_ago": round((now - built_q) / 1000, 1), "candidates": int(len(idx)),
+                    "same_underlying": same_q, "results": res}
 
     def status(self) -> dict:
         def pct(dq):
@@ -219,7 +256,8 @@ def serve(w: Worker, port: int) -> None:
             u = urlparse(self.path)
             q = {k: v[0] for k, v in parse_qs(u.query).items()}
             if u.path == "/similar":
-                body = w.similar(q.get("symbol", ""), int(q.get("k", 10)), q.get("scope", "all"), q.get("stale") == "1")
+                body = w.similar(q.get("symbol", ""), int(q.get("k", 10)), q.get("scope", "all"), q.get("stale") == "1",
+                                 fold=q.get("fold", "1") != "0")
             elif u.path == "/status":
                 body = w.status()
             else:
@@ -242,6 +280,7 @@ def main() -> None:
     a = ap.parse_args()
     w = Worker()
     w.load_refs()
+    w.load_pairs()
     c = Consumer({"bootstrap.servers": C.KAFKA, "group.id": "market-vector-worker", "enable.auto.commit": False})
     parts = c.list_topics(TOPIC, timeout=10).topics[TOPIC].partitions
     tps = []

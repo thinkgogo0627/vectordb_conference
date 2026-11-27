@@ -37,6 +37,7 @@ tmux new -s backfill
 
 ## 6. CDC 등록과 벡터 워커 (과거 데이터를 다 넣은 뒤)
 ```bash
+.venv/bin/python -m market.pairs build                  # 같은 기초자산 쌍 (BTC ↔ IBIT). 출력의 상관 분포를 확인
 .venv/bin/python -m market.cdc register
 sudo systemctl enable --now market@vector_worker
 .venv/bin/python -m market.similar KRW-BTC

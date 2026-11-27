@@ -64,6 +64,7 @@ python -m market.verify_upbit --since 2026-11-24T16:35:00Z --until 2026-11-24T16
 |---|---|
 | `features.py` | 1분봉 → 60분 창의 5분 묶음 12개 → 30차원 벡터 (가격 12, 거래량 12, 요약 6). 거래 부족·정규장 밖·종목 목록 밖이면 벡터를 만들지 않는다 (설계 4절) |
 | `backfill.py` | 과거 1분봉으로 종목별 평소 값(`symbol_ref`: 평소 5분 변동폭, 시간대별 평소 거래량, 5분 묶음 채움 비율)과 오늘의 종목 목록(채움 80% 이상)을 만들고, 목록 종목의 1분봉을 `bars_1m`에 넣는다 (이미 있는 행은 그대로 둔다) |
+| `pairs.py` | 같은 기초자산 쌍(`symbol_pair`): 미국 정규장 5분 수익률 상관 \|corr\| ≥ 0.95. 기능 1이 결과에서 접는다 (BTC ↔ IBIT, NVDA ↔ NVDL). 손 보정은 `same_underlying_manual.json` |
 | `cdc.py` | Debezium 커넥터 `market-bars` (`bars_1m` → `market.public.bars_1m`, poll 50ms) |
 | `vector_worker.py` | CDC를 받아 종목별 최근 80분 1분봉을 유지하고, 소스별로 분이 넘어가면 전 종목 벡터를 다시 계산해 현재 상태 인덱스(Flat)를 바꾼다. 지난 분의 정정이 오면 그 종목만 다시 계산한다. HTTP `/similar`, `/status` |
 | `similar.py` | 조회 명령 |
@@ -72,9 +73,12 @@ python -m market.verify_upbit --since 2026-11-24T16:35:00Z --until 2026-11-24T16
 python -m market.backfill upbit --days 7 --top 150     # 업비트: 24시간 거래대금 상위 150종목, 7일
 python -m market.backfill alpaca --days 20             # 미국: 상장 전 종목, 직전 20거래일 IEX (약 1시간)
 python -m market.backfill upbit-gap --hours 2          # 실시간 수집 시작 전 빈 구간 메우기 (평소 값은 그대로)
+python -m market.pairs build                           # 같은 기초자산 쌍 (벡터 워커 시작 전, 과거 데이터를 넣은 뒤)
+python -m market.pairs show KRW-BTC                    # 한 종목의 짝과 상관
 python -m market.cdc register                          # 과거 데이터를 다 넣은 뒤에 등록 (넣는 중에 등록하면 수백만 행이 CDC로 흐른다)
 python -m market.vector_worker
-python -m market.similar KRW-BTC                       # 지금 BTC와 비슷하게 움직이는 종목 top-10
+python -m market.similar KRW-BTC                       # 지금 BTC와 비슷하게 움직이는 종목 top-10 (같은 기초자산은 접음)
+python -m market.similar KRW-BTC --no-fold             # 접지 않고 그대로
 python -m market.similar NVDA --scope crypto
 python -m market.similar                               # 상태: 인덱스 종목 수, 제외 이유별 수, 지연
 ```

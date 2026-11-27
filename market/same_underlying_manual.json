@@ -1,0 +1,5 @@
+{
+  "_설명": "market.pairs build가 데이터로 찾은 결과를 손으로 고친다. same: 같은 기초자산으로 묶을 쌍, not_same: 묶지 않을 쌍 (종목 코드)",
+  "same": [],
+  "not_same": []
+}
